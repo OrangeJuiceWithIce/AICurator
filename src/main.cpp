@@ -36,20 +36,31 @@ int main() {
     std::cout << "\n[INFO] 开始处理文件路径并保存到数据库:\n" << std::endl;
 
     // 收集所有路径用于批量插入
-    std::vector<std::string> paths;
+    std::vector<FileRecord> records;
     int count = 0;
 
     for (const auto& [frn, info] : vol.frnMap) {
         std::wstring fullPath;
         vol.getPath(frn, fullPath);
+        WIN32_FILE_ATTRIBUTE_DATA fileInfo;
+        GetFileAttributesExW(fullPath.c_str(),GetFileExInfoStandard,&fileInfo);
         std::string utf8Path = wide_to_utf8(fullPath);
-        paths.push_back(utf8Path);
+        
+        FileRecord record{
+            utf8Path,
+            (static_cast<ULONGLONG>(fileInfo.nFileSizeHigh)<<32)|fileInfo.nFileSizeLow,
+            fileInfo.ftCreationTime,
+            fileInfo.ftLastAccessTime,
+            fileInfo.ftLastWriteTime,
+        };
+
+        records.push_back(record);
         count++;
     }
 
     // 批量插入到数据库
     std::cout << "\n[INFO] 正在批量插入 " << count << " 条记录到数据库..." << std::endl;
-    if (db.addRecordsBatch(paths)) {
+    if (db.addRecordsBatch(records)) {
         std::cout << "[INFO] 成功插入 " << count << " 条记录。" << std::endl;
         std::cout << "[INFO] 数据库中共有 " << db.getRecordCount() << " 条记录。" << std::endl;
     } else {

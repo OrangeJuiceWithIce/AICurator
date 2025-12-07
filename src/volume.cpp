@@ -89,10 +89,9 @@ bool Volume::deleteUSN() {
     if (DeviceIoControl(hVol, FSCTL_DELETE_USN_JOURNAL,
         &dujd, sizeof(dujd), nullptr, 0, &br, nullptr)) {
         std::cout << "[INFO] 删除 USN 日志信息成功。" << std::endl;
-        CloseHandle(hVol);
         return true;
     }
-    CloseHandle(hVol);
+
     std::cerr << "[ERROR] 删除 USN 信息失败，错误码: "
               << GetLastError() << std::endl;
     return false;
@@ -128,6 +127,7 @@ bool Volume::getUSNJournal() {
             PfrnName node;
             node.filename = fileName;
             node.pfrn = usnRecord->ParentFileReferenceNumber;
+            
             frnMap[usnRecord->FileReferenceNumber] = node;
 
             dwRetBytes -= usnRecord->RecordLength;

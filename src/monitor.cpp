@@ -95,14 +95,14 @@ void DirectoryMonitor::start() {
 
                 case FILE_ACTION_ADDED:
                     std::cout << "[MONITOR] 文件添加: " << fullPath << std::endl;
-                    if (db && db->isConnected()) db->addRecord(fullPath);
+                    if (db && db->isConnected()) db->addRecord(makeRecord(fullPath));
                     break;
 
                 case FILE_ACTION_MODIFIED:
                     std::cout << "[MONITOR] 文件修改: " << fullPath << std::endl;
                     if (db && db->isConnected()) {
                         if (!db->recordExists(fullPath))
-                            db->addRecord(fullPath);
+                            db->addRecord(makeRecord(fullPath));
                     }
                     break;
 
@@ -123,7 +123,7 @@ void DirectoryMonitor::start() {
                         if (db && db->isConnected()) {
                             db->updatePathsOnDirectoryRename(lastOldPath, fullPath);
                             db->deleteRecord(lastOldPath);
-                            db->addRecord(fullPath);
+                            db->addRecord(makeRecord(fullPath));
                         }
 
                         lastOldPath.clear();

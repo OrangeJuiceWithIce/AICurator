@@ -15,3 +15,30 @@ std::wstring string_to_wstring(const std::string& str) {
     MultiByteToWideChar(CP_ACP, 0, str.c_str(), -1, result.data(), size - 1);
     return result;
 }
+
+FileRecord makeRecord(const std::string& fullPath)
+{
+    FileRecord r {};
+    r.fullpath = fullPath;
+
+    WIN32_FILE_ATTRIBUTE_DATA data;
+    if (GetFileAttributesExA(fullPath.c_str(), GetFileExInfoStandard, &data))
+    {
+        LARGE_INTEGER fileSize;
+        fileSize.HighPart = data.nFileSizeHigh;
+        fileSize.LowPart  = data.nFileSizeLow;
+        r.fileSize = fileSize.QuadPart;
+
+        r.creationTime   = data.ftCreationTime;
+        r.lastAccessTime = data.ftLastAccessTime;
+        r.lastWriteTime  = data.ftLastWriteTime;
+    }
+    else {
+        r.fileSize = 0;
+        r.creationTime = {};
+        r.lastAccessTime = {};
+        r.lastWriteTime = {};
+    }
+
+    return r;
+}

@@ -8,6 +8,16 @@ struct PfrnName{
     std::wstring filename;
 };
 
+struct FileRecord{
+    std::string fullpath;
+    
+    ULONGLONG fileSize = 0;          // 文件大小
+
+    FILETIME creationTime{};         // 创建时间
+    FILETIME lastAccessTime{};       // 最近访问时间
+    FILETIME lastWriteTime{};        // 最近写入时间（修改时间）
+};
+
 class Volume{
 private:
     HANDLE hVol;//目标卷的句柄

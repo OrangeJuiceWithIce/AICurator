@@ -1,4 +1,6 @@
 #pragma once
+#include "../include/volume.h"
+
 #include "sqlite3.h"
 #include <string>
 #include <vector>
@@ -24,19 +26,15 @@ public:
     bool dropTable();
 
     // 记录操作
-    bool addRecord(const std::string& path);
+    bool addRecord(const FileRecord& record);
     bool deleteRecord(const std::string& path);
-    bool deleteRecordById(int id);
-    bool updateRecord(int id, const std::string& newPath);
     bool recordExists(const std::string& path);
 
     // 查询操作
-    bool getAllRecords(std::vector<std::pair<int, std::string>>& records);
-    bool getRecordById(int id, std::string& path);
     int getRecordCount();
 
     // 批量操作
-    bool addRecordsBatch(const std::vector<std::string>& paths);
+    bool addRecordsBatch(const std::vector<FileRecord>& records);
     bool deleteRecordsBatch(const std::vector<std::string>& paths);
     bool updatePathsOnDirectoryRename(const std::string& oldDir,const std::string& newDir);
 

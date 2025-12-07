@@ -1,4 +1,6 @@
 #include "../include/database.h"
+#include "../include/volume.h"
+
 #include <iostream>
 #include <vector>
 
@@ -47,8 +49,12 @@ bool Database::createTable() {
     const char* createTableSQL =
         "CREATE TABLE IF NOT EXISTS files ("
         "id INTEGER PRIMARY KEY AUTOINCREMENT, "
-        "path TEXT UNIQUE NOT NULL, "
-        "created_at DATETIME DEFAULT CURRENT_TIMESTAMP);";
+        "fullpath TEXT UNIQUE NOT NULL, "
+        "fileSize INTEGER NOT NULL DEFAULT 0, "
+        "creationTime INTEGER NOT NULL DEFAULT 0, "
+        "lastAccessTime INTEGER NOT NULL DEFAULT 0, "
+        "lastWriteTime INTEGER NOT NULL DEFAULT 0"
+        ");";
 
     char* errMsg = nullptr;
     if (sqlite3_exec(db, createTableSQL, nullptr, nullptr, &errMsg) != SQLITE_OK) {
@@ -77,28 +83,29 @@ bool Database::dropTable() {
     return true;
 }
 
-bool Database::addRecord(const std::string& path) {
-    if (!isOpen) {
-        std::cerr << "[ERROR] 数据库未打开" << std::endl;
-        return false;
-    }
+bool Database::addRecord(const FileRecord& record) {
+    if (!isOpen) return false;
 
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO files(path) VALUES(?);", -1, &stmt, nullptr) != SQLITE_OK) {
+    const char* sql = 
+        "INSERT OR IGNORE INTO files(fullpath, fileSize, creationTime, lastAccessTime, lastWriteTime) "
+        "VALUES (?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
-    sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 1, record.fullpath.c_str(), -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int64(stmt, 2, record.fileSize);
+    sqlite3_bind_int64(stmt, 3, *reinterpret_cast<const sqlite3_int64*>(&record.creationTime));
+    sqlite3_bind_int64(stmt, 4, *reinterpret_cast<const sqlite3_int64*>(&record.lastAccessTime));
+    sqlite3_bind_int64(stmt, 5, *reinterpret_cast<const sqlite3_int64*>(&record.lastWriteTime));
+
     int result = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
-    if (result != SQLITE_DONE && result != SQLITE_OK) {
-        std::cerr << "[ERROR] 插入记录失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    return true;
+    return result == SQLITE_DONE;
 }
 
 bool Database::deleteRecord(const std::string& path) {
@@ -108,7 +115,7 @@ bool Database::deleteRecord(const std::string& path) {
     }
 
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "DELETE FROM files WHERE path = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "DELETE FROM files WHERE fullpath = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
@@ -119,55 +126,6 @@ bool Database::deleteRecord(const std::string& path) {
 
     if (result != SQLITE_DONE) {
         std::cerr << "[ERROR] 删除记录失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-bool Database::deleteRecordById(int id) {
-    if (!isOpen) {
-        std::cerr << "[ERROR] 数据库未打开" << std::endl;
-        return false;
-    }
-
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "DELETE FROM files WHERE id = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
-        std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    sqlite3_bind_int(stmt, 1, id);
-    int result = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
-    if (result != SQLITE_DONE) {
-        std::cerr << "[ERROR] 删除记录失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    return true;
-}
-
-bool Database::updateRecord(int id, const std::string& newPath) {
-    if (!isOpen) {
-        std::cerr << "[ERROR] 数据库未打开" << std::endl;
-        return false;
-    }
-
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "UPDATE files SET path = ? WHERE id = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
-        std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    sqlite3_bind_text(stmt, 1, newPath.c_str(), -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 2, id);
-    int result = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
-    if (result != SQLITE_DONE) {
-        std::cerr << "[ERROR] 更新记录失败: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
@@ -181,7 +139,7 @@ bool Database::recordExists(const std::string& path) {
     }
 
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM files WHERE path = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "SELECT COUNT(*) FROM files WHERE fullpath = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
@@ -194,53 +152,6 @@ bool Database::recordExists(const std::string& path) {
     sqlite3_finalize(stmt);
 
     return exists;
-}
-
-bool Database::getAllRecords(std::vector<std::pair<int, std::string>>& records) {
-    if (!isOpen) {
-        std::cerr << "[ERROR] 数据库未打开" << std::endl;
-        return false;
-    }
-
-    records.clear();
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT id, path FROM files ORDER BY id;", -1, &stmt, nullptr) != SQLITE_OK) {
-        std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    while (sqlite3_step(stmt) == SQLITE_ROW) {
-        int id = sqlite3_column_int(stmt, 0);
-        const char* path = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 1));
-        records.push_back({id, path ? path : ""});
-    }
-
-    sqlite3_finalize(stmt);
-    return true;
-}
-
-bool Database::getRecordById(int id, std::string& path) {
-    if (!isOpen) {
-        std::cerr << "[ERROR] 数据库未打开" << std::endl;
-        return false;
-    }
-
-    sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "SELECT path FROM files WHERE id = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
-        std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
-        return false;
-    }
-
-    sqlite3_bind_int(stmt, 1, id);
-    bool found = false;
-    if (sqlite3_step(stmt) == SQLITE_ROW) {
-        const char* result = reinterpret_cast<const char*>(sqlite3_column_text(stmt, 0));
-        path = result ? result : "";
-        found = true;
-    }
-    sqlite3_finalize(stmt);
-
-    return found;
 }
 
 int Database::getRecordCount() {
@@ -264,27 +175,32 @@ int Database::getRecordCount() {
     return count;
 }
 
-bool Database::addRecordsBatch(const std::vector<std::string>& paths) {
-    if (!isOpen) {
-        std::cerr << "[ERROR] 数据库未打开" << std::endl;
-        return false;
-    }
+bool Database::addRecordsBatch(const std::vector<FileRecord>& records) {
+    if (!isOpen) return false;
 
-    // 开始事务
     if (sqlite3_exec(db, "BEGIN TRANSACTION;", nullptr, nullptr, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 开始事务失败: " << sqlite3_errmsg(db) << std::endl;
         return false;
     }
 
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "INSERT OR IGNORE INTO files(path) VALUES(?);", -1, &stmt, nullptr) != SQLITE_OK) {
+    const char* sql = 
+        "INSERT OR IGNORE INTO files(fullpath, fileSize, creationTime, lastAccessTime, lastWriteTime) "
+        "VALUES (?, ?, ?, ?, ?);";
+
+    if (sqlite3_prepare_v2(db, sql, -1, &stmt, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
         sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
     }
 
-    for (const auto& path : paths) {
-        sqlite3_bind_text(stmt, 1, path.c_str(), -1, SQLITE_TRANSIENT);
+    for (const auto& record : records) {
+        sqlite3_bind_text(stmt, 1, record.fullpath.c_str(), -1, SQLITE_TRANSIENT);
+        sqlite3_bind_int64(stmt, 2, record.fileSize);
+        sqlite3_bind_int64(stmt, 3, *reinterpret_cast<const sqlite3_int64*>(&record.creationTime));
+        sqlite3_bind_int64(stmt, 4, *reinterpret_cast<const sqlite3_int64*>(&record.lastAccessTime));
+        sqlite3_bind_int64(stmt, 5, *reinterpret_cast<const sqlite3_int64*>(&record.lastWriteTime));
+
         if (sqlite3_step(stmt) != SQLITE_DONE) {
             std::cerr << "[ERROR] 批量插入失败: " << sqlite3_errmsg(db) << std::endl;
             sqlite3_finalize(stmt);
@@ -296,7 +212,6 @@ bool Database::addRecordsBatch(const std::vector<std::string>& paths) {
 
     sqlite3_finalize(stmt);
 
-    // 提交事务
     if (sqlite3_exec(db, "COMMIT;", nullptr, nullptr, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 提交事务失败: " << sqlite3_errmsg(db) << std::endl;
         sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
@@ -319,7 +234,7 @@ bool Database::deleteRecordsBatch(const std::vector<std::string>& paths) {
     }
 
     sqlite3_stmt* stmt = nullptr;
-    if (sqlite3_prepare_v2(db, "DELETE FROM files WHERE path = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
+    if (sqlite3_prepare_v2(db, "DELETE FROM files WHERE fullpath = ?;", -1, &stmt, nullptr) != SQLITE_OK) {
         std::cerr << "[ERROR] 准备语句失败: " << sqlite3_errmsg(db) << std::endl;
         sqlite3_exec(db, "ROLLBACK;", nullptr, nullptr, nullptr);
         return false;
@@ -361,8 +276,8 @@ bool Database::updatePathsOnDirectoryRename(
     sqlite3_stmt* stmt = nullptr;
 
     std::string sql =
-        "UPDATE files SET path = REPLACE(path, ?, ?) "
-        "WHERE path LIKE ?;";
+        "UPDATE files SET fullpath = REPLACE(fullpath, ?, ?) "
+        "WHERE fullpath LIKE ?;";
 
     if (sqlite3_prepare_v2(db, sql.c_str(), -1, &stmt, nullptr) != SQLITE_OK){
         std::cout << "[ERROR] SQLite error: " << sqlite3_errmsg(db) << std::endl;
