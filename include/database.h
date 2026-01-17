@@ -23,17 +23,16 @@ public:
 
     // 表管理
     bool createTable();
-    bool dropTable();
 
-    // 记录操作
+    // file记录操作
     bool addRecord(const FileRecord& record);
     bool deleteRecord(const std::string& path);
     bool recordExists(const std::string& path);
 
-    // 查询操作
+    // file查询操作
     int getRecordCount();
 
-    // 批量操作
+    // file批量操作
     bool addRecordsBatch(const std::vector<FileRecord>& records);
     bool deleteRecordsBatch(const std::vector<std::string>& paths);
     bool updatePathsOnDirectoryRename(const std::string& oldDir,const std::string& newDir);

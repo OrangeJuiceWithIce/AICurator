@@ -122,8 +122,6 @@ void DirectoryMonitor::start() {
 
                         if (db && db->isConnected()) {
                             db->updatePathsOnDirectoryRename(lastOldPath, fullPath);
-                            db->deleteRecord(lastOldPath);
-                            db->addRecord(makeRecord(fullPath));
                         }
 
                         lastOldPath.clear();

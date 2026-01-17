@@ -1,6 +1,7 @@
 package ui;
 
 import db.SQLiteAccessor;
+import model.AiAnalysis;
 import model.FileRecord;
 import util.DeepSeekClient;
 
@@ -22,10 +23,14 @@ public class FileTable {
     private final JTable table;
     private final DefaultTableModel model;
 
+    // Risk 列下标（固定最后一列更简单）
+    private static final int COL_PATH = 0;
+    private static final int COL_RISK = 5;
+
     public FileTable(SQLiteAccessor db) {
         this.db = db;
 
-        String[] cols = {"Path", "Size", "Created", "LastAccess", "LastWrite"};
+        String[] cols = {"Path", "Size", "Created", "LastAccess", "LastWrite", "Risk"};
         model = new DefaultTableModel(cols, 0) {
             public boolean isCellEditable(int r, int c) { return false; }
         };
@@ -42,62 +47,69 @@ public class FileTable {
         return table;
     }
 
-    // --- 搜索监听器 ---
     public DocumentListener createSearchListener(JTextField tf) {
         return new DocumentListener() {
             private void refresh() {
                 List<FileRecord> data = db.search(tf.getText());
                 FileTable.this.update(data);
             }
-
             public void insertUpdate(DocumentEvent e) { refresh(); }
             public void removeUpdate(DocumentEvent e) { refresh(); }
             public void changedUpdate(DocumentEvent e) { refresh(); }
         };
     }
 
-    // --- 更新数据 ---
     public void update(List<FileRecord> list) {
         model.setRowCount(0);
         for (var r : list) {
+            String riskText = (r.aiRisk < 0) ? "" : String.valueOf(r.aiRisk);
             model.addRow(new Object[]{
-                    r.fullpath, r.size, r.creation, r.lastAccess, r.lastWrite
+                    r.fullpath, r.size, r.creation, r.lastAccess, r.lastWrite, riskText
             });
         }
     }
 
-    // ---------------------------------------------------------------
-    // 双击打开文件
-    // ---------------------------------------------------------------
+    /**
+     * 双击行为：
+     * - 双击 Risk 列：弹出窗口显示所有 AI 字段（origin/risk/advice/raw）
+     * - 双击其他列：打开文件
+     */
     private void installDoubleClick() {
         table.addMouseListener(new MouseAdapter() {
             public void mouseClicked(MouseEvent e) {
-                if (e.getClickCount() == 2) {
-                    int row = table.getSelectedRow();
-                    if (row < 0) return;
-                    String path = (String) model.getValueAt(row, 0);
+                if (e.getClickCount() != 2) return;
+
+                int row = table.getSelectedRow();
+                int col = table.getSelectedColumn();
+                if (row < 0) return;
+
+                String path = (String) model.getValueAt(row, COL_PATH);
+
+                if (col == COL_RISK) {
+                    showAiDetailWindow(path, true); // true=允许触发 AI（缓存没命中才调用）
+                } else {
                     openFile(path);
                 }
             }
         });
     }
 
-    // ---------------------------------------------------------------
-    // 右键菜单：删除 / 分析 / 重命名
-    // ---------------------------------------------------------------
     private void installRightClickMenu() {
         JPopupMenu menu = new JPopupMenu();
 
         JMenuItem deleteItem = new JMenuItem("删除");
-        JMenuItem analyseItem = new JMenuItem("分析文件用途");
+        JMenuItem analyseItem = new JMenuItem("分析（写入缓存）");
+        JMenuItem showTagItem = new JMenuItem("查看 AI 字段（不分析）");
         JMenuItem renameItem = new JMenuItem("重命名");
 
         menu.add(deleteItem);
         menu.add(analyseItem);
+        menu.add(showTagItem);
         menu.add(renameItem);
 
         deleteItem.addActionListener(e -> deleteSelected());
         analyseItem.addActionListener(e -> analyseSelected());
+        showTagItem.addActionListener(e -> showTagSelected());
         renameItem.addActionListener(e -> renameSelected());
 
         table.addMouseListener(new MouseAdapter() {
@@ -109,20 +121,16 @@ public class FileTable {
                     menu.show(table, e.getX(), e.getY());
                 }
             }
-
             public void mousePressed(MouseEvent e) { showPopup(e); }
             public void mouseReleased(MouseEvent e) { showPopup(e); }
         });
     }
 
-    // ---------------------------------------------------------------
-    // 删除
-    // ---------------------------------------------------------------
     private void deleteSelected() {
         int row = table.getSelectedRow();
         if (row < 0) return;
 
-        String path = (String) model.getValueAt(row, 0);
+        String path = (String) model.getValueAt(row, COL_PATH);
 
         int confirm = JOptionPane.showConfirmDialog(null,
                 "确认删除?\n" + path, "删除确认", JOptionPane.YES_NO_OPTION);
@@ -136,17 +144,50 @@ public class FileTable {
         model.removeRow(row);
     }
 
-    // ---------------------------------------------------------------
-    // 使用 DeepSeek API 分析文件
-    // ---------------------------------------------------------------
+    /**
+     * 右键“分析”：强制走一次 API，然后写缓存
+     */
     private void analyseSelected() {
         int row = table.getSelectedRow();
         if (row < 0) return;
+        String path = (String) model.getValueAt(row, COL_PATH);
+        showAiDetailWindow(path, true);
+    }
 
-        String path = (String) model.getValueAt(row, 0);
+    /**
+     * 右键“查看”：只看缓存，不触发 API
+     */
+    private void showTagSelected() {
+        int row = table.getSelectedRow();
+        if (row < 0) return;
+        String path = (String) model.getValueAt(row, COL_PATH);
+        showAiDetailWindow(path, false);
+    }
+
+    /**
+     * 核心：展示窗口
+     * allowAnalyse=true 时，缓存不存在才调用 API
+     */
+    private void showAiDetailWindow(String path, boolean allowAnalyse) {
+        // 1) 先读缓存
+        AiAnalysis cached = db.getAiAnalysis(path);
+        if (cached != null && !cached.origin.isBlank()) {
+            showAiDialog(path, cached, "AI 详情（缓存）");
+            return;
+        }
+
+        if (!allowAnalyse) {
+            JOptionPane.showMessageDialog(null, "没有缓存结果。\n你可以选择“分析（写入缓存）”。");
+            return;
+        }
+
+        // 2) 没缓存 -> 调 API -> 解析 -> 写缓存 -> 显示
         FileRecord record = db.getByPath(path);
+        if (record == null) {
+            JOptionPane.showMessageDialog(null, "找不到该路径的索引记录:\n" + path);
+            return;
+        }
 
-        // 显示非阻塞提示框
         final JDialog loading = new JDialog((Frame) null, "正在分析...", false);
         JLabel msg = new JLabel("正在调用 DeepSeek API，请稍候...");
         msg.setBorder(BorderFactory.createEmptyBorder(10, 20, 10, 20));
@@ -155,36 +196,79 @@ public class FileTable {
         loading.setLocationRelativeTo(null);
         loading.setVisible(true);
 
-        new SwingWorker<String, Void>() {
+        new SwingWorker<AiAnalysis, Void>() {
             @Override
-            protected String doInBackground() {
-                return DeepSeekClient.analyseFile(record);
+            protected AiAnalysis doInBackground() {
+                return DeepSeekClient.analyseFileStructured(record);
             }
 
             @Override
             protected void done() {
-                loading.dispose(); // 关闭“正在分析”窗口
-
+                loading.dispose();
                 try {
-                    String result = get();
-                    JOptionPane.showMessageDialog(null, result,
-                            "DeepSeek 文件分析", JOptionPane.INFORMATION_MESSAGE);
+                    AiAnalysis a = get();
+
+                    // 写缓存（按字段写入）
+                    db.upsertAiAnalysis(path, a);
+
+                    // 更新表格 risk 列（只更新当前行）
+                    int row = table.getSelectedRow();
+                    if (row >= 0) {
+                        model.setValueAt(String.valueOf(a.risk), row, COL_RISK);
+                    }
+
+                    showAiDialog(path, a, "AI 详情（新分析）");
                 } catch (Exception e) {
-                    JOptionPane.showMessageDialog(null,
-                            "分析失败：" + e.getMessage());
+                    JOptionPane.showMessageDialog(null, "分析失败：" + e.getMessage());
                 }
             }
         }.execute();
     }
 
-    // ---------------------------------------------------------------
-    // 重命名
-    // ---------------------------------------------------------------
+    /**
+     * 小窗口：展示所有字段
+     */
+    private void showAiDialog(String path, AiAnalysis a, String title) {
+        JDialog dlg = new JDialog((Frame) null, title, false);
+        dlg.setLayout(new BorderLayout(8, 8));
+
+        JTextArea text = new JTextArea();
+        text.setEditable(false);
+        text.setFont(new Font("Microsoft YaHei", Font.PLAIN, 14));
+        text.setLineWrap(true);
+        text.setWrapStyleWord(true);
+
+        String content =
+                "Path:\n" + path + "\n\n" +
+                "origin:\n" + a.origin + "\n\n" +
+                "risk:\n" + a.risk + "\n\n" +
+                "advice:\n" + a.advice + "\n\n" +
+                "raw:\n" + a.raw;
+
+        text.setText(content);
+
+        JScrollPane sp = new JScrollPane(text);
+        sp.setPreferredSize(new Dimension(640, 420));
+
+        JButton close = new JButton("关闭");
+        close.addActionListener(e -> dlg.dispose());
+
+        JPanel bottom = new JPanel(new FlowLayout(FlowLayout.RIGHT));
+        bottom.add(close);
+
+        dlg.add(sp, BorderLayout.CENTER);
+        dlg.add(bottom, BorderLayout.SOUTH);
+
+        dlg.pack();
+        dlg.setLocationRelativeTo(null);
+        dlg.setVisible(true);
+    }
+
     private void renameSelected() {
         int row = table.getSelectedRow();
         if (row < 0) return;
 
-        String old = (String) model.getValueAt(row, 0);
+        String old = (String) model.getValueAt(row, COL_PATH);
         File oldFile = new File(old);
 
         String newName = JOptionPane.showInputDialog("输入新文件名:", oldFile.getName());
@@ -197,9 +281,9 @@ public class FileTable {
         }
 
         String newPath = newFile.getAbsolutePath();
-        db.rename(old, newPath);
 
-        model.setValueAt(newPath, row, 0);
+        db.rename(old, newPath);
+        model.setValueAt(newPath, row, COL_PATH);
     }
 
     private void openFile(String path) {
