@@ -11,7 +11,7 @@ import java.time.Duration;
 
 public class DeepSeekClient {
 
-    private static final String API_KEY = "sk-763d9baa957e4f80856172cbfc53bc50";
+    private static final String API_KEY = "sk-98bf073f9d354fb599b22aba169dde09";
     private static final String URL = "https://api.deepseek.com/chat/completions";
 
     private static final HttpClient client = HttpClient.newBuilder()
@@ -19,48 +19,64 @@ public class DeepSeekClient {
             .build();
 
     /**
-     * 结构化分析：要求模型输出 JSON
-     * 返回 AiAnalysis：包含 origin/risk/advice/rawJson
+     * 结构化分析：优化后的 Prompt
+     * 角色：系统文件安全专家
+     * 能力：根据路径推断软件归属，给出更精准的建议
      */
     public static AiAnalysis analyseFileStructured(FileRecord r) {
 
+        // ==========================================
+        // 优化点 1：更专业的角色设定和更详细的规则
+        // ==========================================
         String prompt = """
-        你是一个给普通用户使用的垃圾文件清理助手。
-        你必须仅输出一个 JSON 对象，不能输出任何多余文本（不要 Markdown、不要代码块）。
-        JSON 格式固定为：
-        {
-          "origin": "一句话说明来源或用途",
-          "risk": 0-100 的整数（越大越危险）,
-          "advice": "一句话建议（例如：可删/建议保留/建议备份后删）"
-        }
+                你是一名资深的计算机文件系统安全专家。请根据提供的文件元数据进行深度分析。
 
-        文件信息：
-        - 文件名：%s
-        - 文件路径：%s
-        - 文件大小：%s 字节
-        - 创建时间：%s
-        - 最后修改时间：%s
-        - 最后访问时间：%s
-        """.formatted(
-                extractName(r.fullpath),
+                【任务要求】
+                1. 分析该文件的具体用途、所属软件或系统组件。
+                2. 评估该文件的安全风险（0=安全/系统文件/用户数据, 100=恶意软件/病毒/高危垃圾）。
+                3. 给出简短的操作建议（保留、备份、删除、隔离）。
+
+                【严格输出格式】
+                你必须且只能输出一个标准的 JSON 对象。
+                严禁输出 markdown 代码块（如 ```json ... ```）。
+                严禁输出 JSON 之外的任何解释性文字。
+                JSON 格式如下：
+                {
+                  "origin": "文件归属/用途说明",
+                  "risk": 0-100的整数,
+                  "advice": "操作建议"
+                }
+
+                【待分析文件数据】
+                - 完整路径：%s
+                - 文件名：%s
+                - 大小：%s 字节
+                - 创建时间：%s
+                - 最后修改：%s
+                """.formatted(
+                // 这里我们把全路径放在最前面，因为路径包含了最重要的上下文信息（如 .git, Program Files 等）
                 escape(r.fullpath),
+                extractName(r.fullpath),
                 r.size,
                 r.creation,
-                r.lastWrite,
-                r.lastAccess
-        );
+                r.lastWrite);
 
         String raw = "";
         try {
+            // ==========================================
+            // 优化点 2：加上 temperature 参数 (0.1)
+            // 让 AI 的回答更稳定、更严谨，减少胡乱发挥
+            // ==========================================
             String jsonReq = """
-            {
-              "model": "deepseek-chat",
-              "messages": [
-                { "role": "user", "content": "%s" }
-              ],
-              "stream": false
-            }
-            """.formatted(escape(prompt));
+                    {
+                      "model": "deepseek-chat",
+                      "messages": [
+                        { "role": "user", "content": "%s" }
+                      ],
+                      "temperature": 0.1,
+                      "stream": false
+                    }
+                    """.formatted(escape(prompt)); // 注意这里要把 prompt 转义放进去
 
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(URL))
@@ -70,20 +86,22 @@ public class DeepSeekClient {
                     .POST(HttpRequest.BodyPublishers.ofString(jsonReq))
                     .build();
 
-            HttpResponse<String> resp =
-                    client.send(request, HttpResponse.BodyHandlers.ofString());
+            HttpResponse<String> resp = client.send(request, HttpResponse.BodyHandlers.ofString());
 
-            raw = extractContent(resp.body());        // 模型 content（仍是字符串）
+            // 调试用：打印 AI 返回的原始文本，方便你看控制台查错
+            // System.out.println("AI Response: " + resp.body());
+
+            raw = extractContent(resp.body());
             AiAnalysis parsed = AiAnalysis.fromJsonLenient(raw);
             parsed.raw = raw;
             return parsed;
 
         } catch (Exception e) {
-            // 失败也返回对象，便于 UI/DB 统一处理
+            e.printStackTrace(); // 打印报错堆栈
             AiAnalysis a = new AiAnalysis();
-            a.origin = "分析失败";
-            a.risk = 100;
-            a.advice = "请检查网络或 API Key";
+            a.origin = "连接超时或分析出错";
+            a.risk = -1;
+            a.advice = "请检查网络配置";
             a.raw = raw.isEmpty() ? ("error=" + e.getMessage()) : raw;
             return a;
         }
@@ -95,21 +113,38 @@ public class DeepSeekClient {
     }
 
     private static String escape(String s) {
-        if (s == null) return "";
+        if (s == null)
+            return "";
         StringBuilder sb = new StringBuilder();
         for (int i = 0; i < s.length(); i++) {
             char c = s.charAt(i);
             switch (c) {
-                case '\\': sb.append("\\\\"); break;
-                case '"':  sb.append("\\\""); break;
-                case '\b': sb.append("\\b"); break;
-                case '\f': sb.append("\\f"); break;
-                case '\n': sb.append("\\n"); break;
-                case '\r': sb.append("\\r"); break;
-                case '\t': sb.append("\\t"); break;
+                case '\\':
+                    sb.append("\\\\");
+                    break;
+                case '"':
+                    sb.append("\\\"");
+                    break;
+                case '\b':
+                    sb.append("\\b");
+                    break;
+                case '\f':
+                    sb.append("\\f");
+                    break;
+                case '\n':
+                    sb.append("\\n");
+                    break;
+                case '\r':
+                    sb.append("\\r");
+                    break;
+                case '\t':
+                    sb.append("\\t");
+                    break;
                 default:
-                    if (c <= 0x1F) sb.append(String.format("\\u%04x", (int)c));
-                    else sb.append(c);
+                    if (c <= 0x1F)
+                        sb.append(String.format("\\u%04x", (int) c));
+                    else
+                        sb.append(c);
             }
         }
         return sb.toString();
@@ -122,11 +157,13 @@ public class DeepSeekClient {
     private static String extractContent(String json) {
         // 定位 "content"
         int idx = json.indexOf("\"content\"");
-        if (idx < 0) return json;
+        if (idx < 0)
+            return json;
 
         // 找到 content 后第一个引号
         int a = json.indexOf("\"", idx + 9);
-        if (a < 0) return json;
+        if (a < 0)
+            return json;
 
         // 从 a+1 开始找到匹配的结束引号（考虑转义）
         StringBuilder out = new StringBuilder();
@@ -135,15 +172,22 @@ public class DeepSeekClient {
             char c = json.charAt(i);
             if (esc) {
                 // 只处理常见转义
-                if (c == 'n') out.append('\n');
-                else if (c == 'r') out.append('\r');
-                else if (c == 't') out.append('\t');
-                else out.append(c);
+                if (c == 'n')
+                    out.append('\n');
+                else if (c == 'r')
+                    out.append('\r');
+                else if (c == 't')
+                    out.append('\t');
+                else
+                    out.append(c);
                 esc = false;
             } else {
-                if (c == '\\') esc = true;
-                else if (c == '"') break;
-                else out.append(c);
+                if (c == '\\')
+                    esc = true;
+                else if (c == '"')
+                    break;
+                else
+                    out.append(c);
             }
         }
         return out.toString().trim();
