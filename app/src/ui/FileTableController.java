@@ -9,6 +9,7 @@ import service.FileService;
 import javax.swing.*;
 import java.io.File;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 
 public class FileTableController {
 
@@ -17,11 +18,20 @@ public class FileTableController {
     private final FileService fileService;
     private final AiAnalysisService aiService;
 
+    // --- 搜索相关：防抖 + 丢弃过期结果 ---
+    private final Timer searchDebounce;
+    private volatile String pendingKeyword = "";
+    private final AtomicInteger searchSeq = new AtomicInteger(0); // 递增版本号
+
     public FileTableController(SQLiteAccessor db, FileTableView view) {
         this.db = db;
         this.view = view;
         this.fileService = new FileService();
         this.aiService = new AiAnalysisService(db);
+
+        // 250ms 防抖：用户停止输入一会儿才真正触发查询
+        this.searchDebounce = new Timer(250, e -> runSearchAsync(pendingKeyword));
+        this.searchDebounce.setRepeats(false);
 
         wire();
     }
@@ -34,8 +44,34 @@ public class FileTableController {
     }
 
     public void onQueryChanged(String keyword) {
-        List<FileRecord> data = db.search(keyword);
-        view.updateRows(data);
+        pendingKeyword = (keyword == null) ? "" : keyword;
+        searchDebounce.restart(); // 频繁输入时只会触发最后一次
+    }
+
+    private void runSearchAsync(String keyword) {
+        final int mySeq = searchSeq.incrementAndGet();
+
+        new SwingWorker<List<FileRecord>, Void>() {
+            @Override
+            protected List<FileRecord> doInBackground() {
+                // 注意：这里已经不在 EDT 了
+                return db.search(keyword);
+            }
+
+            @Override
+            protected void done() {
+                // 丢弃旧查询结果：如果它不是最新那一次，就不更新 UI
+                if (mySeq != searchSeq.get()) return;
+
+                try {
+                    List<FileRecord> data = get();
+                    view.updateRows(data); // 回到 EDT 更新 UI（SwingWorker 的 done 在 EDT）
+                } catch (Exception e) {
+                    // 搜索失败不弹窗也行，避免打字时一直弹
+                    // view.showInfo("搜索失败：" + e.getMessage());
+                }
+            }
+        }.execute();
     }
 
     private void open(String path) {
@@ -55,10 +91,7 @@ public class FileTableController {
             return;
         }
 
-        // 你现在 DLL monitor 也会同步删 DB；Java 这里删 DB 属于“即时刷新”
-        // 如果你想彻底避免双写，可以注释掉下一行，只靠 monitor 更新
         db.delete(path);
-
         view.removeSelectedRow();
     }
 
@@ -73,14 +106,11 @@ public class FileTableController {
             return;
         }
 
-        // 同上：可选是否由 Java 立即改 DB
         db.rename(oldPath, newPath);
-
         view.updatePathForSelectedRow(newPath);
     }
 
     private void showAi(String path, boolean allowAnalyse) {
-        // 1) 缓存命中直接显示
         AiAnalysis cached = aiService.getCached(path);
         if (cached != null && cached.origin != null && !cached.origin.isBlank()) {
             showAiDialog(path, cached, "AI 详情（缓存）");
@@ -92,7 +122,6 @@ public class FileTableController {
             return;
         }
 
-        // 2) 异步分析 + 写缓存
         final JDialog loading = view.showLoading("正在分析...", "正在调用 DeepSeek API，请稍候...");
 
         new SwingWorker<AiAnalysis, Void>() {
@@ -120,7 +149,6 @@ public class FileTableController {
     }
 
     private void showAiDialog(String path, AiAnalysis a, String title) {
-        // 这里依然属于 UI 展示，你也可以继续下沉到 view 里
         JDialog dlg = new JDialog((java.awt.Frame) null, title, false);
         dlg.setLayout(new java.awt.BorderLayout(8, 8));
 
