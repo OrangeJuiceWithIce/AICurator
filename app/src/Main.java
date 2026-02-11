@@ -1,4 +1,6 @@
 import ui.SearchWindow;
+import ui.ModernTheme;
+import ui.StartupGate;
 import ctool.NativeMonitor;
 
 public class Main {
@@ -9,8 +11,10 @@ public class Main {
     public static void main(String[] args) {
 
         // 启动 UI
-        javax.swing.SwingUtilities.invokeLater(() ->
-                new SearchWindow(DB_PATH));
+        javax.swing.SwingUtilities.invokeLater(() -> {
+            ModernTheme.install();
+            new SearchWindow(DB_PATH);
+        });
 
         // 启动 C++ 索引构建器
         new Thread(Main::runIndexerOnce, "Indexer").start();
@@ -20,14 +24,19 @@ public class Main {
     }
 
     private static void runIndexerOnce() {
+        StartupGate.markIndexStart();
+        int exit = -1;
         try {
             ProcessBuilder pb = new ProcessBuilder("bin\\main.exe");
             pb.directory(new java.io.File("."));
             pb.inheritIO();
             Process p = pb.start();
-            p.waitFor();
+            exit = p.waitFor();
         } catch (Exception e) {
             System.err.println("[JAVA] 索引器启动失败: " + e.getMessage());
+        } finally {
+            StartupGate.markIndexDone(exit);
+            System.out.println("[JAVA] 索引器结束，exit=" + exit);
         }
     }
 
