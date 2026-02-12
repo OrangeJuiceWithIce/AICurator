@@ -1,3 +1,4 @@
+// file: src/ui/LogWindow.java
 package ui;
 
 import config.OssConfig;
@@ -10,6 +11,8 @@ import javax.swing.*;
 import javax.swing.table.*;
 import java.awt.*;
 import java.io.File;
+import java.io.IOException;
+
 import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.util.List;
@@ -23,6 +26,14 @@ public class LogWindow extends JFrame {
 
     // 从 detail 中提取 uploaded=objectKey
     private static final Pattern UPLOADED_KEY = Pattern.compile("uploaded=([^;\\s]+)");
+
+    // 列索引（避免写魔法数字）
+    private static final int COL_TIME   = 0;
+    private static final int COL_ACTION = 1;
+    private static final int COL_PATH   = 2;
+    private static final int COL_DETAIL = 3;
+    private static final int COL_UNDO   = 4;
+    private static final int COL_RAW    = 5; // ✅ 隐藏列：原始日志行
 
     private final DefaultTableModel model;
     private final JTable table;
@@ -101,11 +112,11 @@ public class LogWindow extends JFrame {
         top.add(clearBtn, c);
 
         // =========================
-        // Table (新增 “撤回” 列)
+        // Table (新增 “撤回” 列 + 隐藏 RAW 列)
         // =========================
-        model = new DefaultTableModel(new String[]{"Time", "Action", "Path", "Detail", "撤回"}, 0) {
+        model = new DefaultTableModel(new String[]{"Time", "Action", "Path", "Detail", "撤回", "RAW"}, 0) {
             public boolean isCellEditable(int r, int col) {
-                return col == 4; // 只有撤回列可点
+                return col == COL_UNDO; // 只有撤回列可点
             }
         };
 
@@ -127,11 +138,17 @@ public class LogWindow extends JFrame {
         table.setDefaultRenderer(Object.class, new StripeRenderer());
 
         // 撤回按钮列：渲染 + 编辑器
-        TableColumn undoCol = table.getColumnModel().getColumn(4);
+        TableColumn undoCol = table.getColumnModel().getColumn(COL_UNDO);
         undoCol.setCellRenderer(new UndoButtonRenderer());
         undoCol.setCellEditor(new UndoButtonEditor(new JCheckBox()));
         undoCol.setMaxWidth(90);
         undoCol.setMinWidth(90);
+
+        // ✅ 隐藏 RAW 列（但保留数据）
+        TableColumn rawCol = table.getColumnModel().getColumn(COL_RAW);
+        rawCol.setMinWidth(0);
+        rawCol.setMaxWidth(0);
+        rawCol.setPreferredWidth(0);
 
         sorter = new TableRowSorter<>(model);
         table.setRowSorter(sorter);
@@ -165,7 +182,6 @@ public class LogWindow extends JFrame {
     }
 
     private void reload() {
-        // ✅ 只读 DELETE/RENAME
         List<LogEntry> list = LogReader.readAllDeleteRename();
 
         model.setRowCount(0);
@@ -181,7 +197,8 @@ public class LogWindow extends JFrame {
                 undo = "撤回";
             }
 
-            model.addRow(new Object[]{ ts, action, path, detail, undo });
+            // ✅ 第 6 列存 RAW 原始行，供 removeExactLine 精确删除
+            model.addRow(new Object[]{ ts, action, path, detail, undo, e.raw });
         }
         applyFilter();
     }
@@ -215,17 +232,13 @@ public class LogWindow extends JFrame {
         sorter.setRowFilter(new RowFilter<>() {
             @Override
             public boolean include(Entry<? extends DefaultTableModel, ? extends Integer> entry) {
-                String ts = (String) entry.getValue(0);
-                String ac = safe(entry.getValue(1));
-                String p = safe(entry.getValue(2));
+                String ts = safe(entry.getValue(COL_TIME));
+                String ac = safe(entry.getValue(COL_ACTION));
+                String p  = safe(entry.getValue(COL_PATH));
 
-                // action filter
                 if (action != null && !"ALL".equals(action) && !action.equals(ac)) return false;
-
-                // path contains
                 if (!pathKey.isEmpty() && !safeLower(p).contains(pathKey)) return false;
 
-                // date range
                 if (from != null || to != null) {
                     LocalDate d = parseDateFromTimestamp(ts);
                     if (d == null) return false;
@@ -247,23 +260,21 @@ public class LogWindow extends JFrame {
     }
 
     // =========================
-    // 撤回：核心逻辑
+    // 撤回：核心逻辑（完整）
     // =========================
     private void doUndoAtViewRow(int viewRow) {
         int r = table.convertRowIndexToModel(viewRow);
 
-        String action = safe(model.getValueAt(r, 1));
+        String action = safe(model.getValueAt(r, COL_ACTION));
         if (!"DELETE".equals(action)) return;
 
-        String path   = safe(model.getValueAt(r, 2));
-        String detail = safe(model.getValueAt(r, 3));
+        String path   = safe(model.getValueAt(r, COL_PATH));
+        String detail = safe(model.getValueAt(r, COL_DETAIL));
+        String rawLine = safe(model.getValueAt(r, COL_RAW)); // ✅ 正确取 RAW 列
 
-        // ✅ 关键：拿到这一行日志的原始行内容，用于精确删除
-        // 约定：RAW 列在最后一列（index = model.getColumnCount()-1）
-        String rawLine = safe(model.getValueAt(r, model.getColumnCount() - 1));
         if (rawLine.isEmpty()) {
             JOptionPane.showMessageDialog(this,
-                    "缺少 RAW 日志行，无法从文件中精确删除该条日志。\n请在表格中增加隐藏 RAW 列。",
+                    "缺少 RAW 日志行，无法从文件中精确删除该条日志。",
                     "撤回失败",
                     JOptionPane.ERROR_MESSAGE);
             return;
@@ -305,6 +316,7 @@ public class LogWindow extends JFrame {
                 JOptionPane.YES_NO_OPTION
         ) == JOptionPane.YES_OPTION;
 
+        // loading dialog
         JDialog loading = new JDialog(this, "正在撤回...", true);
         loading.setLayout(new BorderLayout(8, 8));
         JLabel lb = new JLabel("正在从 OSS 下载并写回本地，请稍候...");
@@ -313,10 +325,25 @@ public class LogWindow extends JFrame {
         loading.setSize(480, 160);
         loading.setLocationRelativeTo(this);
 
+        final int modelRowToRemove = r;
+
         new SwingWorker<Void, Void>() {
             @Override
             protected Void doInBackground() {
+                // 1) 从 OSS 恢复到原路径
                 OssRecycleService.restoreToOriginal(cfg, objectKey, path, deleteRemoteAfter);
+
+                // 2) 恢复成功后删日志（必须在后台做，避免 UI 卡）
+                try {
+                    boolean removed = LogReader.removeExactLine(rawLine);
+                    if (!removed) {
+                        // 这里抛异常，让 done() 走失败提示（你也可以改成警告不失败）
+                        throw new RuntimeException("日志删除未命中（可能日志文件内容变化）: " + LogReader.getLogFilePath());
+                    }
+                } catch (IOException ioe) {
+                    throw new RuntimeException("删除日志失败: " + ioe.getMessage(), ioe);
+                }
+
                 return null;
             }
 
@@ -324,21 +351,12 @@ public class LogWindow extends JFrame {
             protected void done() {
                 loading.dispose();
                 try {
-                    get(); // ✅ 没抛异常 = 撤回成功
+                    get(); // ✅ 没异常 = 恢复 + 删日志 都成功
 
-                    // ✅ 1) 从日志文件里删掉这条 DELETE 日志
-                    try {
-                        LogReader.removeExactLine(rawLine);
-                    } catch (Exception ex) {
-                        // 撤回已成功，但日志删失败：给提示即可
-                        JOptionPane.showMessageDialog(LogWindow.this,
-                                "文件已恢复，但删除日志失败：\n" + ex.getMessage(),
-                                "提示",
-                                JOptionPane.WARNING_MESSAGE);
+                    // ✅ UI 移除该行（不必等 reload）
+                    if (modelRowToRemove >= 0 && modelRowToRemove < model.getRowCount()) {
+                        model.removeRow(modelRowToRemove);
                     }
-
-                    // ✅ 2) UI 立即移除该行（不必等 reload）
-                    model.removeRow(r);
 
                     JOptionPane.showMessageDialog(LogWindow.this,
                             "恢复成功：\n" + path,
@@ -347,7 +365,7 @@ public class LogWindow extends JFrame {
 
                 } catch (Exception e) {
                     JOptionPane.showMessageDialog(LogWindow.this,
-                            "恢复失败：\n" + e.getMessage(),
+                            "撤回失败：\n" + e.getMessage(),
                             "撤回失败",
                             JOptionPane.ERROR_MESSAGE);
                 }

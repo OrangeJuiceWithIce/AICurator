@@ -1,3 +1,4 @@
+// file: src/util/LogReader.java
 package util;
 
 import model.LogEntry;
@@ -38,7 +39,7 @@ public final class LogReader {
         return res;
     }
 
-    // 你的日志格式：time\tACTION\tPATH\tDETAIL
+    // 日志格式：time\tACTION\tPATH\tDETAIL
     private static LogEntry parseLine(String raw) {
         if (raw == null) return null;
         String line = raw.trim();
@@ -52,6 +53,7 @@ public final class LogReader {
             String action = parts[1].trim();
             String path = parts[2].trim();
             String detail = parts[3].trim();
+            // ✅ raw 保留原始行（不 trim 的原始值更稳，但这里沿用 raw）
             return new LogEntry(t, action, path, detail, raw);
         } catch (Exception e) {
             return null;
@@ -63,10 +65,10 @@ public final class LogReader {
         Files.write(LOG_FILE, new byte[0], StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
     }
 
-    /** 删掉第一条与 rawLine 完全一致的日志行（用于撤回后删除 DELETE 日志） */
-    public static void removeExactLine(String rawLine) throws IOException {
-        if (rawLine == null || rawLine.isEmpty()) return;
-        if (!Files.exists(LOG_FILE)) return;
+    /** 删掉第一条与 rawLine 完全一致的日志行。返回是否删除成功 */
+    public static boolean removeExactLine(String rawLine) throws IOException {
+        if (rawLine == null || rawLine.isEmpty()) return false;
+        if (!Files.exists(LOG_FILE)) return false;
 
         List<String> lines = Files.readAllLines(LOG_FILE, StandardCharsets.UTF_8);
         boolean removed = false;
@@ -85,9 +87,10 @@ public final class LogReader {
             Files.write(LOG_FILE, out, StandardCharsets.UTF_8,
                     StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
         }
+        return removed;
     }
 
-    /** 方便排查：打印 LogReader 实际在读哪个文件 */
+    /** 方便排查：LogReader 实际在读哪个文件 */
     public static Path getLogFilePath() {
         return LOG_FILE.toAbsolutePath().normalize();
     }
