@@ -86,24 +86,52 @@ public class FileTableController {
             return;
         }
 
-        boolean ok = fileService.deleteReal(path);
-        if (!ok) {
-            util.OpLogger.log("DELETE", path, "fail: deleteReal=false");
-            view.showInfo("删除失败（可能被占用/无权限）:\n" + path);
-            return;
-        }
-
-        // 删除成功后再清 DB + UI
+        // 1) 先上传 OSS
         try {
-            db.delete(path);
-            view.removeSelectedRow();
-            util.OpLogger.log("DELETE", path, "ok");
+            config.OssConfig cfg = config.OssConfigStore.load();
+            if (cfg == null || !cfg.isComplete()) {
+                util.OpLogger.log("DELETE", path, "fail: oss_not_configured");
+                view.showInfo("未配置 OSS。\n请先点击右上角【OSS设置】并测试通过。");
+                return;
+            }
+
+            File f = new File(path);
+            if (!f.exists() || !f.isFile()) {
+                util.OpLogger.log("DELETE", path, "fail: local_file_not_found");
+                view.showInfo("本地文件不存在（可能已被移动/删除）:\n" + path);
+                return;
+            }
+
+            String objectKey = oss.OssRecycleService.uploadToRecycle(cfg, f, path);
+            // 你可以选择提示用户 key，方便去控制台查
+            // view.showInfo("已上传到 OSS：\n" + objectKey);
+
+            // 2) 上传成功后再删除本地
+            boolean ok = fileService.deleteReal(path);
+            if (!ok) {
+                util.OpLogger.log("DELETE", path, "partial_ok: uploaded=" + objectKey + "; fail: deleteReal=false");
+                view.showInfo("已上传到 OSS，但本地删除失败（可能被占用/无权限）:\n" + path);
+                return;
+            }
+
+            // 3) 删除成功后再清 DB + UI
+            try {
+                db.delete(path);
+                view.removeSelectedRow();
+                util.OpLogger.log("DELETE", path, "ok: uploaded=" + objectKey);
+            } catch (Exception e) {
+                util.OpLogger.log("DELETE", path,
+                        "partial_ok: uploaded=" + objectKey + "; file_deleted; db_or_ui_fail=" + e.getMessage());
+                view.showInfo("文件已删除且已上传 OSS，但数据库/界面同步失败:\n" + e.getMessage());
+            }
+
         } catch (Exception e) {
-            // 真实文件已删，但 DB/UI 同步失败，这也要写清楚
-            util.OpLogger.log("DELETE", path, "partial_ok: file_deleted; db_or_ui_fail=" + e.getMessage());
-            view.showInfo("文件已删除，但刷新/数据库同步失败:\n" + e.getMessage());
+            // 上传失败：不允许继续删除本地
+            util.OpLogger.log("DELETE", path, "fail: upload_oss=" + e.getMessage());
+            view.showInfo("上传 OSS 失败，已取消删除。\n" + e.getMessage());
         }
     }
+
 
     private void rename(String oldPath) {
         File oldFile = new File(oldPath);

@@ -46,7 +46,7 @@ public class SearchWindow extends JFrame {
         JPanel top = new JPanel(new BorderLayout(10, 10));
         top.setOpaque(false);
 
-        JLabel title = new JLabel("Simple Everything");
+        JLabel title = new JLabel("AICurator");
         title.setFont(title.getFont().deriveFont(Font.BOLD, 18f));
 
         // ✅ right tools
@@ -57,6 +57,12 @@ public class SearchWindow extends JFrame {
         JPanel right = new JPanel(new FlowLayout(FlowLayout.RIGHT, 8, 0));
         right.setOpaque(false);
         right.add(logBtn);
+
+        JButton ossBtn = new JButton("OSS设置");
+        ossBtn.addActionListener(e -> OssSettingsDialog.show(this, false));
+        ossBtn.setFocusPainted(false);
+        right.add(ossBtn);
+
 
         searchField = new JTextField();
         searchField.putClientProperty("JTextField.placeholderText", "Search path...");
