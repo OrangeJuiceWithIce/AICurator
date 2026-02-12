@@ -1,0 +1,5 @@
+2026-02-12 17:26:30.614	AI_VIEW	D:\Xlab\AICurator\simple\app\src\util\LlmClient.java	allowAnalyse=1
+2026-02-12 17:26:30.617	AI_ANALYZE	D:\Xlab\AICurator\simple\app\src\util\LlmClient.java	start
+2026-02-12 17:26:33.257	AI_ANALYZE	D:\Xlab\AICurator\simple\app\src\util\LlmClient.java	ok: risk=10
+2026-02-12 17:27:02.232	AI_VIEW	D:\Xlab\AICurator\simple\app\src\util\LlmClient.java	allowAnalyse=1
+2026-02-12 17:27:02.234	AI_VIEW_CACHE	D:\Xlab\AICurator\simple\app\src\util\LlmClient.java	hit

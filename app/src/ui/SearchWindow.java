@@ -63,6 +63,10 @@ public class SearchWindow extends JFrame {
         ossBtn.setFocusPainted(false);
         right.add(ossBtn);
 
+        JButton llmBtn = new JButton("LLM设置");
+        llmBtn.addActionListener(e -> new ui.LlmSettingsDialog(this).setVisible(true));
+        right.add(llmBtn);
+
 
         searchField = new JTextField();
         searchField.putClientProperty("JTextField.placeholderText", "Search path...");

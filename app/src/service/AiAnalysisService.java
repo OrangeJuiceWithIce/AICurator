@@ -3,7 +3,7 @@ package service;
 import db.SQLiteAccessor;
 import model.AiAnalysis;
 import model.FileRecord;
-import util.DeepSeekClient;
+import util.LlmClient;
 
 public class AiAnalysisService {
     private final SQLiteAccessor db;
@@ -20,7 +20,7 @@ public class AiAnalysisService {
         FileRecord record = db.getByPath(path);
         if (record == null) return null;
 
-        AiAnalysis a = DeepSeekClient.analyseFileStructured(record);
+        AiAnalysis a = LlmClient.analyseFileStructured(record);
         db.upsertAiAnalysis(path, a);
         return a;
     }
