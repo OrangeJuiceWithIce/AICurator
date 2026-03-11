@@ -9,10 +9,12 @@
 1. 需要配置支持openai风格接口的大模型  
 2. 需要自行配置阿里云oss的接口以支持文件备份  
 ## 项目结构
+```
 -app java代码部分  
   -lib jar文件  
   -src java代码实现部分  
 -bin C编译后的dll文件  
 -include C头文件部分  
 -src C代码实现部分  
+```
 
